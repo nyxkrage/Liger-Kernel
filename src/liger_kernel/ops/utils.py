@@ -43,13 +43,13 @@ def calculate_settings(n):
             f"the recommended Triton blocksize = {MAX_FUSED_SIZE}."
         )
 
-    num_warps = 4
+    num_warps = 2
     if BLOCK_SIZE >= 32768:
-        num_warps = 32
-    elif BLOCK_SIZE >= 8192:
         num_warps = 16
-    elif BLOCK_SIZE >= 2048:
+    elif BLOCK_SIZE >= 8192:
         num_warps = 8
+    elif BLOCK_SIZE >= 2048:
+        num_warps = 4
     return BLOCK_SIZE, num_warps
 
 

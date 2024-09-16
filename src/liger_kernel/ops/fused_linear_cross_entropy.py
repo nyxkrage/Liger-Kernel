@@ -92,7 +92,7 @@ def fused_linear_cross_entropy_forward(
             label_smoothing=label_smoothing,
             reduction=reduction,
             BLOCK_SIZE=BLOCK_SIZE,
-            num_warps=32,
+            num_warps=16,
         )
 
         # gradient of logits_chunk is computed in-place by the above triton kernel.
@@ -157,7 +157,7 @@ def fused_linear_cross_entropy_backward(
             grad_output,
             H,
             BLOCK_SIZE=BLOCK_SIZE,
-            num_warps=32,
+            num_warps=16,
         )
 
         # handle grad_weight
@@ -171,7 +171,7 @@ def fused_linear_cross_entropy_backward(
                 grad_output,
                 H,
                 BLOCK_SIZE=BLOCK_SIZE,
-                num_warps=32,
+                num_warps=16,
             )
 
         if grad_bias is not None:
@@ -184,7 +184,7 @@ def fused_linear_cross_entropy_backward(
                 grad_output,
                 1,
                 BLOCK_SIZE=BLOCK_SIZE,
-                num_warps=32,
+                num_warps=16,
             )
     return grad_input, grad_weight, grad_bias
 
