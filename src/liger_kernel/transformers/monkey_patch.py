@@ -622,6 +622,78 @@ def apply_liger_kernel_to_phi3(
                 ).to(torch_dtype)
 
 
+def apply_liger_kernel_to_cohere(
+    cross_entropy: bool = False,
+    fused_linear_cross_entropy: bool = True,
+    layer_norm: bool = True,
+    swiglu: bool = True,
+    model: PreTrainedModel = None,
+) -> None:
+    """
+    Apply Liger kernels to replace original implementation in HuggingFace Cohere models
+
+    Args:
+        cross_entropy (bool): Whether to apply Liger's cross entropy loss. Default is True.
+        fused_linear_cross_entropy (bool):
+            Whether to apply Liger's fused linear cross entropy loss. Default is True.
+            `cross_entropy` and `fused_linear_cross_entropy` cannot both be True.
+            If `fused_linear_cross_entropy` is True, the logits will not be materialized but more memory efficient.
+        layer_norm (bool): Whether to apply Liger's RMSNorm. Default is True.
+        swiglu (bool): Whether to apply Liger's SwiGLU MLP. Default is True.
+        model (PreTrainedModel): The model instance to apply Liger kernels to, if the model has already been
+        loaded. Default is None.
+    """
+    assert not (
+        cross_entropy and fused_linear_cross_entropy
+    ), "cross_entropy and fused_linear_cross_entropy cannot both be True."
+
+    from transformers.models.cohere import modeling_cohere
+
+    if layer_norm:
+        modeling_cohere.CohereLayerNorm = LigerLayerNorm
+    if cross_entropy:
+        modeling_cohere.CrossEntropyLoss = LigerCrossEntropyLoss
+    if fused_linear_cross_entropy:
+        modeling_cohere.CohereForCausalLM.forward = mistral_lce_forward
+    if swiglu:
+        modeling_cohere.CohereMLP = LigerSwiGLUMLP
+
+    if model is not None:
+        # The model instance already exists, so we need to additionally patch the
+        # instance variables that reference already-instantiated modules
+        config: PretrainedConfig = model.config
+
+        if hasattr(model, "model"):
+            # The case for MistralForCausalLM, MistralForTokenClassification for example
+            base_model = model.model
+        else:
+            # Direct MistralModel
+            base_model = model
+
+        torch_dtype = config.torch_dtype
+        head_dim = config.hidden_size // config.num_attention_heads
+        if layer_norm:
+            base_model.norm = LigerLayerNorm(
+                config.hidden_size, eps=config.rms_norm_eps
+            ).to(torch_dtype)
+
+        for decoder_layer in base_model.layers:
+            if swiglu:
+                decoder_layer.mlp = LigerSwiGLUMLP(config).to(torch_dtype)
+            if layer_norm:
+                decoder_layer.input_layernorm = LigerLayerNorm(
+                    config.hidden_size, eps=config.rms_norm_eps
+                ).to(torch_dtype)
+                if config.use_qk_norm:
+                    decoder_layer.self_attn.q_norm = LigerLayerNorm(
+                        (config.num_attention_heads, head_dim), eps=config.rms_norm_eps
+                    ).to(torch_dtype)
+                    decoder_layer.self_attn.k_norm = LigerLayerNorm(
+                        (config.num_key_value_heads, head_dim), eps=config.rms_norm_eps
+                    ).to(torch_dtype)
+
+
+
 # Model type corresponds to the keys defined in transformers/models/auto/modeling_auto.py
 MODEL_TYPE_TO_APPLY_LIGER_FN = {
     "gemma": apply_liger_kernel_to_gemma,
@@ -632,6 +704,7 @@ MODEL_TYPE_TO_APPLY_LIGER_FN = {
     "qwen2": apply_liger_kernel_to_qwen2,
     "qwen2_vl": apply_liger_kernel_to_qwen2_vl,
     "phi3": apply_liger_kernel_to_phi3,
+    "cohere": apply_liger_kernel_to_cohere,
 }
 
 
