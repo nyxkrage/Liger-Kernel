@@ -56,3 +56,18 @@ class LigerPhi3SwiGLUMLP(nn.Module):
         up_states = self.gate_up_proj(x)
         gate, up_states = up_states.chunk(2, dim=-1)
         return self.down_proj(LigerSiLUMulFunction.apply(gate, up_states))
+    
+class LigerQwen3MoeSwiGLUMLP(nn.Module):
+    def __init__(self, config, intermediate_size=None):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.intermediate_size = intermediate_size if intermediate_size is not None else config.intermediate_size
+        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        if config.hidden_act not in ["silu", "swish"]:
+            raise ValueError(f"Activation function {config.hidden_act} not supported.")
+
+    def forward(self, x):
+        return self.down_proj(LigerSiLUMulFunction.apply(self.gate_proj(x), self.up_proj(x)))

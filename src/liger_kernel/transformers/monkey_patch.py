@@ -31,6 +31,7 @@ from liger_kernel.transformers.rms_norm import LigerRMSNorm
 from liger_kernel.transformers.rope import liger_rotary_pos_emb
 from liger_kernel.transformers.swiglu import LigerBlockSparseTop2MLP
 from liger_kernel.transformers.swiglu import LigerPhi3SwiGLUMLP
+from liger_kernel.transformers.swiglu import LigerQwen3MoeSwiGLUMLP
 from liger_kernel.transformers.swiglu import LigerSwiGLUMLP
 
 transformer_version = version.parse(transformers.__version__)
@@ -921,6 +922,63 @@ def apply_liger_kernel_to_qwen2_5_vl(
                 _patch_rms_norm_module(decoder_layer.input_layernorm)
                 _patch_rms_norm_module(decoder_layer.post_attention_layernorm)
 
+def apply_liger_kernel_to_qwen3_moe(
+    rope: bool = True,
+    cross_entropy: bool = False,
+    fused_linear_cross_entropy: bool = True,
+    rms_norm: bool = True,
+    swiglu: bool = True,
+    model: PreTrainedModel = None,
+) -> None:
+    """
+    Apply Liger kernels to replace original implementation in HuggingFace Qwen2.5-VL models.
+    NOTE: Qwen2.5-VL is not available in transformers<4.48.2
+
+    Args:
+        cross_entropy (bool): Whether to apply Liger's cross entropy loss. Default is False.
+        fused_linear_cross_entropy (bool):
+            Whether to apply Liger's fused linear cross entropy loss. Default is True.
+            `cross_entropy` and `fused_linear_cross_entropy` cannot both be True.
+            If `fused_linear_cross_entropy` is True, the logits will not be materialized but more memory efficient.
+        rms_norm (bool): Whether to apply Liger's RMSNorm. Default is True.
+        swiglu (bool): Whether to apply Liger's SwiGLU MLP. Default is True.
+        model (PreTrainedModel): The model instance to apply Liger kernels to, if the model has already been
+        loaded. Default is None.
+    """
+    assert not (cross_entropy and fused_linear_cross_entropy), (
+        "cross_entropy and fused_linear_cross_entropy cannot both be True."
+    )
+
+    from transformers.models.qwen3_moe import modeling_qwen3_moe
+    from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeModel
+
+    if rope:
+        modeling_qwen3_moe.apply_rotary_pos_emb = liger_rotary_pos_emb
+    if rms_norm:
+        modeling_qwen3_moe.Qwen3MoeRMSNorm = LigerRMSNorm
+    if swiglu:
+        modeling_qwen3_moe.Qwen3MoeMLP = LigerQwen3MoeSwiGLUMLP
+
+    if model is not None:
+        # The model instance already exists, so we need to additionally patch the
+        # instance variables that reference already-instantiated modules
+
+        # get the base model from the model instance
+        base_model: Qwen3MoeModel = getattr(model, model.base_model_prefix, model)
+
+        if rms_norm:
+            _patch_rms_norm_module(base_model.norm)
+        for decoder_layer in base_model.layers:
+            for experts in decoder_layer.experts:
+                if swiglu:
+                    _bind_method_to_module(experts, "forward", LigerQwen3MoeSwiGLUMLP.forward)
+            if rms_norm:
+                _patch_rms_norm_module(decoder_layer.input_layernorm)
+                _patch_rms_norm_module(decoder_layer.post_attention_layernorm)
+                _patch_rms_norm_module(decoder_layer.self_attn.k_norm)
+                _patch_rms_norm_module(decoder_layer.self_attn.q_norm)
+
+
 
 def apply_liger_kernel_to_phi3(
     rope: bool = True,
@@ -1068,6 +1126,7 @@ MODEL_TYPE_TO_APPLY_LIGER_FN = {
     "qwen2": apply_liger_kernel_to_qwen2,
     "qwen2_vl": apply_liger_kernel_to_qwen2_vl,
     "qwen2_5_vl": apply_liger_kernel_to_qwen2_5_vl,
+    "qwen3_moe": apply_liger_kernel_to_qwen3_moe,
     "phi3": apply_liger_kernel_to_phi3,
     "paligemma": apply_liger_kernel_to_paligemma,
 }
