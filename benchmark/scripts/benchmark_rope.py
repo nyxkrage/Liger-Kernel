@@ -11,7 +11,7 @@ from utils import _test_memory
 from utils import parse_benchmark_script_args
 from utils import run_benchmarks
 
-from liger_kernel.transformers.rope import liger_rotary_pos_emb
+from liger_kernel.transformers.rope import LigerRotaryEmbedding # Changed import
 from liger_kernel.utils import infer_device
 from liger_kernel.utils import transformers_version_dispatch
 
@@ -26,6 +26,7 @@ def bench_speed_rope(input: SingleBenchmarkRunInput) -> SingleBenchmarkRunOutput
     num_q_heads = extra_benchmark_config["num_q_heads"]
     num_kv_heads = extra_benchmark_config["num_kv_heads"]
     dtype = extra_benchmark_config["dtype"]
+    # rope_type = extra_benchmark_config.get("rope_type", "llama") # Get rope_type, default to llama
 
     # x can be either hidden_size or seq_len
     hidden_size = extra_benchmark_config["hidden_size"] if "hidden_size" in extra_benchmark_config else input.x
@@ -56,11 +57,16 @@ def bench_speed_rope(input: SingleBenchmarkRunInput) -> SingleBenchmarkRunOutput
         torch.randn_like(k, device=device),
     )
     pos_ids = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0)
-    cos, sin = rotary_emb(k, pos_ids)
+    cos, sin = rotary_emb(k, pos_ids) # HF LlamaRotaryEmbedding used for consistent cos/sin generation
+
+    liger_rope_module = None
+    if provider.startswith("liger"):
+        rope_type_str = provider.split("-")[-1] # e.g., "liger-llama" -> "llama"
+        liger_rope_module = LigerRotaryEmbedding(rope_type=rope_type_str)
 
     def fwd():
-        if provider == "liger":
-            return liger_rotary_pos_emb(q, k, cos, sin, pos_ids)
+        if provider.startswith("liger"):
+            return liger_rope_module.forward(q, k, cos, sin, position_ids=pos_ids) # Pass pos_ids if needed by module
         elif provider == "huggingface":
             return apply_rotary_pos_emb(q, k, cos, sin, pos_ids)
         else:
@@ -137,11 +143,16 @@ def bench_memory_rope(input: SingleBenchmarkRunInput) -> SingleBenchmarkRunOutpu
         torch.randn_like(k, device=device),
     )
     pos_ids = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0)
-    cos, sin = rotary_emb(k, pos_ids)
+    cos, sin = rotary_emb(k, pos_ids) # HF LlamaRotaryEmbedding used for consistent cos/sin generation
+
+    liger_rope_module = None
+    if provider.startswith("liger"):
+        rope_type_str = provider.split("-")[-1]
+        liger_rope_module = LigerRotaryEmbedding(rope_type=rope_type_str)
 
     def full():
-        if provider == "liger":
-            q_out, k_out = liger_rotary_pos_emb(q, k, cos, sin, pos_ids)
+        if provider.startswith("liger"):
+            q_out, k_out = liger_rope_module.forward(q, k, cos, sin, position_ids=pos_ids)
         else:
             q_out, k_out = apply_rotary_pos_emb(q, k, cos, sin, pos_ids)
         torch.autograd.grad((q_out, k_out), (q, k), (dq, dk), allow_unused=True, retain_graph=True)
@@ -165,7 +176,7 @@ if __name__ == "__main__":
         "x_name": "H",
         "x_label": "hidden size",
         "x_values": [32 * (2**i) for i in range(4, 10, 2)],
-        "kernel_providers": ["liger", "huggingface"],
+        "kernel_providers": ["liger-llama", "liger-gptj", "huggingface"], # Updated providers
         "extra_benchmark_configs": [
             {
                 "dtype": torch.bfloat16,
@@ -196,7 +207,7 @@ if __name__ == "__main__":
         "x_name": "T",
         "x_label": "sequence length",
         "x_values": [2**i for i in range(10, 15)],
-        "kernel_providers": ["liger", "huggingface"],
+        "kernel_providers": ["liger-llama", "liger-gptj", "huggingface"], # Updated providers
         "extra_benchmark_configs": [
             {
                 "dtype": torch.bfloat16,
